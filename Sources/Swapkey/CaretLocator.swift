@@ -34,6 +34,45 @@ enum CaretLocator {
         return nil
     }
 
+    /// Text right before and after the caret in the focused element, up to `limit` UTF-16 units each way.
+    /// Nil if the element exposes no text or something is selected.
+    static func surroundingText(pid: pid_t, limit: Int = 64) -> (before: String, after: String)? {
+        _ = setTimeout
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        guard let element: AXUIElement = attribute(appElement, kAXFocusedUIElementAttribute),
+              let rangeValue: AXValue = attribute(element, kAXSelectedTextRangeAttribute) else { return nil }
+        var caret = CFRange()
+        guard AXValueGetValue(rangeValue, .cfRange, &caret), caret.length == 0, caret.location >= 0 else { return nil }
+
+        let start = max(0, caret.location - limit)
+        let before = CFRange(location: start, length: caret.location - start)
+        // Ask only for the text around the caret: the whole value of a long document is slow to copy.
+        if let count: Int = attribute(element, kAXNumberOfCharactersAttribute), count >= caret.location {
+            let after = CFRange(location: caret.location, length: min(limit, count - caret.location))
+            if let beforeText = string(in: element, range: before), let afterText = string(in: element, range: after) {
+                return (beforeText, afterText)
+            }
+        }
+        guard let value: String = attribute(element, kAXValueAttribute) else { return nil }
+        let text = value as NSString
+        guard caret.location <= text.length else { return nil }
+        let afterLength = min(limit, text.length - caret.location)
+        return (text.substring(with: NSRange(location: before.location, length: before.length)),
+                text.substring(with: NSRange(location: caret.location, length: afterLength)))
+    }
+
+    private static func string(in element: AXUIElement, range: CFRange) -> String? {
+        if range.length == 0 { return "" }
+        var range = range
+        guard let rangeValue = AXValueCreate(.cfRange, &range) else { return nil }
+        var result: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXStringForRangeParameterizedAttribute as CFString, rangeValue, &result
+        ) == .success else { return nil }
+        return result as? String
+    }
+
     private static func caretRect(in element: AXUIElement, screens: [NSRect]) -> (NSRect, Source)? {
         guard let rangeValue: AXValue = attribute(element, kAXSelectedTextRangeAttribute) else { return nil }
         var range = CFRange()

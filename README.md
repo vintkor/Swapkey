@@ -10,6 +10,7 @@ Type "ghbdtn" with the English layout active and Swapkey shows a small panel nex
 - Hotkeys follow the order of layouts in System Settings: `⌥1` is the first layout, `⌥2` the second, and so on, so each layout always has the same key.
 - Optional spelling suggestions for the current language with `⌥0`.
 - Sticky Shift fix: "ПРивет" becomes "Привет" automatically.
+- Sentence capitalization: "Привет. как дела" becomes "Привет. Как дела" automatically (not after abbreviations like "т.е." or "см.").
 - Settings in the menu-bar menu: panel timeout, switched-off layouts, excluded apps, launch at login.
 
 ## Requirements

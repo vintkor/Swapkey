@@ -170,6 +170,10 @@ final class SwitchController: KeyboardMonitorDelegate {
         strokes.append(stroke)
         if stroke.isSpace { wordFinished() }
         refreshPanel()
+        let character = currentLayout.character(for: stroke)
+        if settings.capitalizeSentences, Self.sentenceEnds.contains(character) {
+            capitalizeAhead(after: character, generation: generation, count: strokes.count)
+        }
     }
 
     // MARK: - Detection
@@ -187,13 +191,13 @@ final class SwitchController: KeyboardMonitorDelegate {
 
     private func analyzeWord(_ range: Range<Int>, generation: Int, current: KeyboardLayout) {
         guard generation == self.generation, range.upperBound < strokes.count, current === currentLayout else { return }
-        if settings.fixStickyShift, erased == 0 {
+        if settings.fixStickyShift || settings.capitalizeSentences, erased == 0 {
             // Keys typed after the space may already be in the app: wait until we have seen them all.
             if tapLock.withLock({ _pendingKeys }) > 0 {
                 DispatchQueue.main.async { self.analyzeWord(range, generation: generation, current: current) }
                 return
             }
-            fixStickyShift(range, current: current)
+            autoFix(range, current: current)
         }
 
         switch verdict(for: range) {
@@ -221,23 +225,117 @@ final class SwitchController: KeyboardMonitorDelegate {
         }
     }
 
+    /// The rewrites applied without asking, right after a word is typed: sticky Shift and sentence
+    /// capitalization. Rewrites the text in place once, from the first changed stroke, and updates
+    /// the buffer to match.
+    private func autoFix(_ range: Range<Int>, current: KeyboardLayout) {
+        var fixed = strokes
+        if settings.fixStickyShift { fixStickyShift(&fixed, range, current: current) }
+        if settings.capitalizeSentences { capitalizeSentence(&fixed, range, current: current) }
+        guard let first = fixed.indices.first(where: { fixed[$0] != strokes[$0] }) else { return }
+
+        // Everything from the first changed letter on, including whatever was typed after the word.
+        let deleteCount = strokes.count - first
+        strokes = fixed
+        verdicts.removeAll()
+        Injector.replace(deleteCount: deleteCount, with: current.text(for: strokes[first...]))
+        refreshPanel()
+    }
+
     /// "ПРивет" → "Привет": two capitals followed by at least two lowercase letters, fixed only if the
-    /// result is a dictionary word (so "IPhone", "MHz" or "IDs" stay). Rewrites the text in place and
-    /// updates the buffer to match.
-    private func fixStickyShift(_ range: Range<Int>, current: KeyboardLayout) {
+    /// result is a dictionary word (so "IPhone", "MHz" or "IDs" stay).
+    private func fixStickyShift(_ strokes: inout [KeyStroke], _ range: Range<Int>, current: KeyboardLayout) {
         guard !strokes[range].contains(where: \.capsLock),
               let offset = Self.stickyShiftIndex(strokes[range].map { current.character(for: $0) }) else { return }
         let second = range.lowerBound + offset
         var fixed = strokes
         fixed[second] = KeyStroke(keyCode: strokes[second].keyCode, shift: false, capsLock: false)
         guard detector.isWord(current.text(for: fixed[range]), in: current) else { return }
-
-        // Everything from the second letter on, including whatever was typed after the word.
-        let deleteCount = strokes.count - second
         strokes = fixed
-        verdicts.removeAll()
-        Injector.replace(deleteCount: deleteCount, with: current.text(for: strokes[second...]))
-        refreshPanel()
+    }
+
+    /// "Привет. как дела" → "Привет. Как дела": capitalizes a lowercase word right after ".", "!" or "?".
+    /// Skipped after abbreviations ("т.е.", "т. д.", "см."), numbers and "...", for words with capitals
+    /// inside ("iPhone"), and when the sentence end is not in the buffer.
+    private func capitalizeSentence(_ strokes: inout [KeyStroke], _ range: Range<Int>, current: KeyboardLayout) {
+        guard range.lowerBound >= 2, strokes[range.lowerBound - 1].isSpace,
+              !strokes[range].contains(where: \.capsLock) else { return }
+        let previousStart = strokes[..<(range.lowerBound - 1)].lastIndex(where: \.isSpace).map { $0 + 1 } ?? 0
+        let previousRange = previousStart..<(range.lowerBound - 1)
+        guard !previousRange.isEmpty, Self.endsSentence(current.text(for: strokes[previousRange])) else { return }
+        // A "." typed in the wrong layout is a letter there ("ю" on the Russian layout).
+        if case .wrong = verdict(for: previousRange) { return }
+
+        let chars = strokes[range].map { current.character(for: $0) }
+        guard let offset = chars.firstIndex(where: { $0.first?.isLetter == true }),
+              chars[offset] != chars[offset].uppercased(),
+              !chars[(offset + 1)...].contains(where: { $0 != $0.lowercased() }),
+              LayoutDetector.core(of: chars.joined()) != nil else { return }
+        // Only opening quotes and brackets before the letter, and nothing that is a letter in another
+        // layout: in a wrong-layout word "[" or "'" is the first letter ("х", "э").
+        for index in range.lowerBound..<(range.lowerBound + offset) {
+            guard Self.openingPunctuation.contains(chars[index - range.lowerBound]),
+                  !activeLayouts.contains(where: { $0.character(for: strokes[index]).first?.isLetter == true }) else {
+                return
+            }
+        }
+        let index = range.lowerBound + offset
+        strokes[index] = KeyStroke(keyCode: strokes[index].keyCode, shift: true, capsLock: false)
+    }
+
+    /// "привет| как дела" + "." → "привет. Как дела": a sentence end typed in the middle of text
+    /// capitalizes the word after it. The buffer knows nothing past the caret, so the text comes from
+    /// Accessibility. Retried a few times: the app may not have inserted `mark` yet when AX is asked.
+    private func capitalizeAhead(after mark: String, generation: Int, count: Int, attempt: Int = 0) {
+        guard attempt < 4, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
+        caretQueue.asyncAfter(deadline: .now() + 0.03 * Double(attempt + 1)) {
+            let text = CaretLocator.surroundingText(pid: pid)
+            DispatchQueue.main.async {
+                // Anything typed since then may be in front of the word, or have moved the caret.
+                guard generation == self.generation, count == self.strokes.count, self.erased == 0,
+                      let text, self.tapLock.withLock({ self._pendingKeys }) == 0 else { return }
+                guard text.before.hasSuffix(mark) else {
+                    return self.capitalizeAhead(after: mark, generation: generation, count: count, attempt: attempt + 1)
+                }
+                let previous = text.before.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
+                guard Self.endsSentence(previous), let fix = Self.capitalizationAhead(text.after) else { return }
+                Injector.replaceAhead(offset: fix.offset, length: 1, with: fix.letter)
+            }
+        }
+    }
+
+    /// For text after a sentence end: where the lowercase letter starting the next word is (in characters
+    /// from the caret) and its capital. The word must follow spaces, may open with quotes or a bracket,
+    /// and must have no capitals inside ("iPhone"). Nil when there is nothing to fix.
+    static func capitalizationAhead(_ after: String) -> (offset: Int, letter: String)? {
+        let spaces = after.prefix { $0 == " " }
+        guard !spaces.isEmpty else { return nil }
+        let word = after.dropFirst(spaces.count).prefix { !$0.isWhitespace }
+        let openers = word.prefix { openingPunctuation.contains(String($0)) }
+        guard let letter = word.dropFirst(openers.count).first, letter.isLetter, letter.isLowercase,
+              LayoutDetector.core(of: String(word)) != nil,
+              !word.dropFirst(openers.count + 1).contains(where: \.isUppercase) else { return nil }
+        return (spaces.count + openers.count, letter.uppercased())
+    }
+
+    private static let sentenceEnds: Set<String> = [".", "!", "?"]
+    private static let openingPunctuation: Set<String> = ["\"", "«", "„", "“", "(", "‘"]
+    /// Abbreviations that end with a dot but usually do not end the sentence (single letters and
+    /// ones with a dot inside, like "т.е." or "e.g.", are recognised without the list).
+    private static let abbreviations: Set<String> = [
+        "др", "см", "стр", "рис", "табл", "ул", "пр", "пер", "д", "кв", "тел", "им", "гл", "св", "проф",
+        "акад", "напр", "прим", "англ", "рус", "укр", "тыс", "млн", "млрд", "руб", "коп", "грн", "мин",
+        "сек", "вв", "гг", "etc", "vs", "mr", "mrs", "ms", "dr", "st", "cf", "no", "approx", "incl",
+    ]
+
+    /// Whether a word ending with this text is a sentence end: "!" and "?" always, "." unless it is
+    /// "..." or follows an abbreviation or a number.
+    static func endsSentence(_ token: String) -> Bool {
+        guard let last = token.last else { return false }
+        if last == "!" || last == "?" { return true }
+        guard last == ".", !token.hasSuffix(".."), let core = LayoutDetector.core(of: token) else { return false }
+        // `core` is nil for "т.е." or "5.", and a single letter is an initial or "т. д.".
+        return core.count > 1 && !abbreviations.contains(core.lowercased())
     }
 
     private func offerLayouts(_ candidates: [Candidate], from start: Int) {

@@ -12,6 +12,7 @@ final class Settings {
     private enum Key {
         static let spellingEnabled = "spellingEnabled"
         static let fixStickyShift = "fixStickyShift"
+        static let capitalizeSentences = "capitalizeSentences"
         static let panelTimeout = "panelTimeout"
         static let hideAfterCorrectWords = "hideAfterCorrectWords"
         static let disabledLayoutIDs = "disabledLayoutIDs"
@@ -23,6 +24,7 @@ final class Settings {
         defaults.register(defaults: [
             Key.spellingEnabled: true,
             Key.fixStickyShift: true,
+            Key.capitalizeSentences: true,
             Key.panelTimeout: 30.0,
             Key.hideAfterCorrectWords: 3,
         ])
@@ -48,6 +50,12 @@ final class Settings {
     var fixStickyShift: Bool {
         get { defaults.bool(forKey: Key.fixStickyShift) }
         set { defaults.set(newValue, forKey: Key.fixStickyShift) }
+    }
+
+    /// Capitalize the first word after ".", "!" or "?" right after it is typed, without asking.
+    var capitalizeSentences: Bool {
+        get { defaults.bool(forKey: Key.capitalizeSentences) }
+        set { defaults.set(newValue, forKey: Key.capitalizeSentences) }
     }
 
     /// Idle time after which the panel hides; every key press while it is shown restarts the countdown.

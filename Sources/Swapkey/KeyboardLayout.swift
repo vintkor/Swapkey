@@ -1,7 +1,7 @@
 import Carbon
 
 /// Physical key press, independent of the layout that was active when it was typed.
-struct KeyStroke {
+struct KeyStroke: Equatable {
     let keyCode: UInt16
     let shift: Bool
     let capsLock: Bool

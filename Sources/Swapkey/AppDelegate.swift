@@ -62,6 +62,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Проверять орфографию", #selector(toggleSpelling), checked: settings.spellingEnabled))
         menu.addItem(item("Исправлять залипший Shift (ПРивет → Привет)", #selector(toggleStickyShift),
                           checked: settings.fixStickyShift))
+        menu.addItem(item("Заглавная буква в начале предложения", #selector(toggleCapitalizeSentences),
+                          checked: settings.capitalizeSentences))
         menu.addItem(submenu("Показывать подсказку", Settings.panelTimeoutChoices.map { seconds in
             item("\(Int(seconds)) с без нажатий", #selector(setPanelTimeout(_:)),
                  checked: settings.panelTimeout == seconds, value: seconds)
@@ -166,6 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleStickyShift() {
         settings.fixStickyShift.toggle()
+    }
+
+    @objc private func toggleCapitalizeSentences() {
+        settings.capitalizeSentences.toggle()
     }
 
     @objc private func setPanelTimeout(_ sender: NSMenuItem) {
