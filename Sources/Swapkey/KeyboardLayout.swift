@@ -85,6 +85,13 @@ enum InputSources {
         return KeyboardLayout(source: source)
     }
 
+    /// Cheap enough to call on every key press.
+    static func currentLayoutID() -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let ptr = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+        return Unmanaged<CFString>.fromOpaque(ptr).takeUnretainedValue() as String
+    }
+
     static func select(_ layout: KeyboardLayout) {
         TISSelectInputSource(layout.source)
     }
