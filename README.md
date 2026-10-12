@@ -11,6 +11,7 @@ Type "ghbdtn" with the English layout active and Swapkey shows a small panel nex
 - Optional spelling suggestions for the current language with `⌥0`.
 - Sticky Shift fix: "ПРивет" becomes "Привет" automatically.
 - Sentence capitalization: "Привет. как дела" becomes "Привет. Как дела" automatically (not after abbreviations like "т.е." or "см.").
+- Learns words missing from the system dictionary: a word you leave as typed twice while it is flagged is added to the macOS spelling dictionary (can be turned off; learned words are listed in the menu and can be removed).
 - Settings in the menu-bar menu: panel timeout, switched-off layouts, excluded apps, launch at login.
 
 ## Requirements
@@ -34,6 +35,14 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 `build.sh` signs the app with a self-signed code-signing certificate named "Punto Dev" from the login keychain if it exists, otherwise ad-hoc. With an ad-hoc signature the permission has to be granted again after every rebuild.
 
 Do not remove Swapkey from the Accessibility list while it is running: quit it first.
+
+## Tests
+
+```sh
+./test.sh
+```
+
+Besides unit tests for the text rules, the suite types every line of `Tests/SwapkeyTests/Corpus` word by word: correct Russian, Ukrainian and English text must get no layout suggestions, and the same text typed in the wrong layout must come back exactly. Add a line there whenever Swapkey gets a phrase wrong.
 
 ## Versioning
 

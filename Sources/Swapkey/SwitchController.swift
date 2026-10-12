@@ -29,7 +29,7 @@ final class SwitchController: KeyboardMonitorDelegate {
     }
 
     private let monitor = KeyboardMonitor()
-    private let detector = LayoutDetector()
+    private let analyzer = BufferAnalyzer()
     private let panel = SuggestionPanel()
 
     /// All layouts enabled in System Settings, in their order there (which defines the hotkey digits).
@@ -52,10 +52,6 @@ final class SwitchController: KeyboardMonitorDelegate {
     private var candidates: [Candidate] = []
     /// Correct words in a row since the last wrong one, while the panel is up.
     private var correctStreak = 0
-    /// Spell checker verdicts by the word's text in the current layout (which is fixed until a reset).
-    private var verdicts: [String: Verdict] = [:]
-    /// Spelling fixes by layout and text; nil values (nothing to fix) are cached too.
-    private var fixes: [String: String?] = [:]
     private var hideTimer: Timer?
 
     /// Digits (0…9) selectable by hotkey right now, empty when the panel is hidden.
@@ -96,6 +92,8 @@ final class SwitchController: KeyboardMonitorDelegate {
     func settingsChanged() {
         let disabled = settings.disabledLayoutIDs
         activeLayouts = layouts.filter { !disabled.contains($0.id) }
+        analyzer.layouts = activeLayouts
+        analyzer.spellingEnabled = settings.spellingEnabled
         let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         isExcludedApp = bundleID.map(settings.excludedBundleIDs.contains) ?? false
         reset()
@@ -144,6 +142,8 @@ final class SwitchController: KeyboardMonitorDelegate {
         let commandLike = flags.intersection([.maskCommand, .maskControl, .maskAlternate])
 
         if !commandLike.isEmpty || Self.resetKeyCodes.contains(keyCode) {
+            // Esc dismisses the panel, Return sends the text as it is: either way the words were fine.
+            if keyCode == kVK_Escape || keyCode == kVK_Return { learnIgnoredWords() }
             return reset()
         }
 
@@ -173,7 +173,7 @@ final class SwitchController: KeyboardMonitorDelegate {
         if stroke.isSpace { wordFinished() }
         refreshPanel()
         let character = currentLayout.character(for: stroke)
-        if settings.capitalizeSentences, Self.sentenceEnds.contains(character) {
+        if settings.capitalizeSentences, BufferAnalyzer.sentenceEnds.contains(character) {
             capitalizeAhead(generation: generation, count: strokes.count)
         }
     }
@@ -204,32 +204,21 @@ final class SwitchController: KeyboardMonitorDelegate {
             autoFix(range, current: current)
         }
 
-        switch verdict(for: range) {
+        switch analyzer.decide(strokes, range, current: current) {
         case .correct:
             guard anchor != nil else { return }
             correctStreak += 1
-            if correctStreak >= settings.hideAfterCorrectWords { hidePanel() }
-        case .wrong(let candidates):
-            let trusted = candidates.filter { isTrusted($0.layout, for: range, current: current) }
-            if !trusted.isEmpty { offerLayouts(trusted, from: range.lowerBound) }
-        case .unknown:
-            // Valid nowhere: a typo in the current language, or a typo made in the wrong layout.
-            let word = strokes[range]
-            if spellingFix(current.text(for: word), in: current) != nil {
-                correctStreak = 0
-                offer(from: range.lowerBound)
-                return
+            if correctStreak >= settings.hideAfterCorrectWords {
+                learnIgnoredWords()
+                hidePanel()
             }
-            let candidates = activeLayouts.compactMap { layout -> Candidate? in
-                let text = layout.text(for: word)
-                // Same text in both layouts (Russian and Ukrainian share most letters): that would be a
-                // spelling fix in another language, not a layout mistake.
-                guard layout.id != current.id, text != current.text(for: word),
-                      isTrusted(layout, for: range, current: current),
-                      let fix = spellingFix(text, in: layout) else { return nil }
-                return Candidate(layout: layout, word: fix)
-            }
-            if !candidates.isEmpty { offerLayouts(candidates, from: range.lowerBound) }
+        case .layouts(let candidates):
+            offerLayouts(candidates, from: range.lowerBound)
+        case .spelling:
+            correctStreak = 0
+            offer(from: range.lowerBound)
+        case .none:
+            break
         }
     }
 
@@ -237,58 +226,16 @@ final class SwitchController: KeyboardMonitorDelegate {
     /// capitalization. Rewrites the text in place once, from the first changed stroke, and updates
     /// the buffer to match.
     private func autoFix(_ range: Range<Int>, current: KeyboardLayout) {
-        var fixed = strokes
-        if settings.fixStickyShift { fixStickyShift(&fixed, range, current: current) }
-        if settings.capitalizeSentences { capitalizeSentence(&fixed, range, current: current) }
+        let fixed = analyzer.autoFixed(strokes, range, current: current, stickyShift: settings.fixStickyShift,
+                                       capitalize: settings.capitalizeSentences)
         guard let first = fixed.indices.first(where: { fixed[$0] != strokes[$0] }) else { return }
 
         // Everything from the first changed letter on, including whatever was typed after the word.
         let deleteCount = strokes.count - first
         strokes = fixed
-        verdicts.removeAll()
+        analyzer.reset()
         Injector.replace(deleteCount: deleteCount, with: current.text(for: strokes[first...]))
         refreshPanel()
-    }
-
-    /// "ПРивет" → "Привет": two capitals followed by at least two lowercase letters, fixed only if the
-    /// result is a dictionary word (so "IPhone", "MHz" or "IDs" stay).
-    private func fixStickyShift(_ strokes: inout [KeyStroke], _ range: Range<Int>, current: KeyboardLayout) {
-        guard !strokes[range].contains(where: \.capsLock),
-              let offset = Self.stickyShiftIndex(strokes[range].map { current.character(for: $0) }) else { return }
-        let second = range.lowerBound + offset
-        var fixed = strokes
-        fixed[second] = KeyStroke(keyCode: strokes[second].keyCode, shift: false, capsLock: false)
-        guard detector.isWord(current.text(for: fixed[range]), in: current) else { return }
-        strokes = fixed
-    }
-
-    /// "Привет. как дела" → "Привет. Как дела": capitalizes a lowercase word right after ".", "!" or "?".
-    /// Skipped after abbreviations ("т.е.", "т. д.", "см."), numbers and "...", for words with capitals
-    /// inside ("iPhone"), and when the sentence end is not in the buffer.
-    private func capitalizeSentence(_ strokes: inout [KeyStroke], _ range: Range<Int>, current: KeyboardLayout) {
-        guard range.lowerBound >= 2, strokes[range.lowerBound - 1].isSpace,
-              !strokes[range].contains(where: \.capsLock) else { return }
-        let previousStart = strokes[..<(range.lowerBound - 1)].lastIndex(where: \.isSpace).map { $0 + 1 } ?? 0
-        let previousRange = previousStart..<(range.lowerBound - 1)
-        guard !previousRange.isEmpty, Self.endsSentence(current.text(for: strokes[previousRange])) else { return }
-        // A "." typed in the wrong layout is a letter there ("ю" on the Russian layout).
-        if case .wrong = verdict(for: previousRange) { return }
-
-        let chars = strokes[range].map { current.character(for: $0) }
-        guard let offset = chars.firstIndex(where: { $0.first?.isLetter == true }),
-              chars[offset] != chars[offset].uppercased(),
-              !chars[(offset + 1)...].contains(where: { $0 != $0.lowercased() }),
-              LayoutDetector.core(of: chars.joined()) != nil else { return }
-        // Only opening quotes and brackets before the letter, and nothing that is a letter in another
-        // layout: in a wrong-layout word "[" or "'" is the first letter ("х", "э").
-        for index in range.lowerBound..<(range.lowerBound + offset) {
-            guard Self.openingPunctuation.contains(chars[index - range.lowerBound]),
-                  !activeLayouts.contains(where: { $0.character(for: strokes[index]).first?.isLetter == true }) else {
-                return
-            }
-        }
-        let index = range.lowerBound + offset
-        strokes[index] = KeyStroke(keyCode: strokes[index].keyCode, shift: true, capsLock: false)
     }
 
     /// "привет| как дела" + "." → "привет. Как дела": a sentence end typed in the middle of text
@@ -310,68 +257,12 @@ final class SwitchController: KeyboardMonitorDelegate {
                     return self.capitalizeAhead(generation: generation, count: count, attempt: attempt + 1)
                 }
                 let previous = text.before.split(whereSeparator: \.isWhitespace).last.map(String.init) ?? ""
-                guard Self.endsSentence(previous), let fix = Self.capitalizationAhead(text.after) else { return }
+                guard BufferAnalyzer.endsSentence(previous), let fix = BufferAnalyzer.capitalizationAhead(text.after) else {
+                    return
+                }
                 Injector.replaceAhead(offset: fix.offset, length: 1, with: fix.letter)
             }
         }
-    }
-
-    /// For text after a sentence end: where the lowercase letter starting the next word is (in characters
-    /// from the caret) and its capital. The word must follow spaces, may open with quotes or a bracket,
-    /// and must have no capitals inside ("iPhone"). Nil when there is nothing to fix.
-    static func capitalizationAhead(_ after: String) -> (offset: Int, letter: String)? {
-        let spaces = after.prefix { $0 == " " }
-        guard !spaces.isEmpty else { return nil }
-        let word = after.dropFirst(spaces.count).prefix { !$0.isWhitespace }
-        let openers = word.prefix { openingPunctuation.contains(String($0)) }
-        guard let letter = word.dropFirst(openers.count).first, letter.isLetter, letter.isLowercase,
-              LayoutDetector.core(of: String(word)) != nil,
-              !word.dropFirst(openers.count + 1).contains(where: \.isUppercase) else { return nil }
-        return (spaces.count + openers.count, letter.uppercased())
-    }
-
-    private static let sentenceEnds: Set<String> = [".", "!", "?"]
-    private static let openingPunctuation: Set<String> = ["\"", "«", "„", "“", "(", "‘"]
-    /// Abbreviations that end with a dot but usually do not end the sentence (single letters and
-    /// ones with a dot inside, like "т.е." or "e.g.", are recognised without the list).
-    private static let abbreviations: Set<String> = [
-        "др", "см", "стр", "рис", "табл", "ул", "пр", "пер", "д", "кв", "тел", "им", "гл", "св", "проф",
-        "акад", "напр", "прим", "англ", "рус", "укр", "тыс", "млн", "млрд", "руб", "коп", "грн", "мин",
-        "сек", "вв", "гг", "etc", "vs", "mr", "mrs", "ms", "dr", "st", "cf", "no", "approx", "incl",
-    ]
-
-    /// Whether a word ending with this text is a sentence end: "!" and "?" always, "." unless it is
-    /// "..." or follows an abbreviation or a number.
-    static func endsSentence(_ token: String) -> Bool {
-        guard let last = token.last else { return false }
-        if last == "!" || last == "?" { return true }
-        guard last == ".", !token.hasSuffix(".."), let core = LayoutDetector.core(of: token) else { return false }
-        // `core` is nil for "т.е." or "5.", and a single letter is an initial or "т. д.".
-        return core.count > 1 && !abbreviations.contains(core.lowercased())
-    }
-
-    /// Russian and Ukrainian share most keys, so a word missing from the current dictionary often turns
-    /// into a valid word of the other language by one letter ("кейсы" → "кейсі"). Such a candidate is
-    /// dropped when one of the recent words is valid in the current language only: the user is writing
-    /// in it, and the word is just not in the dictionary. Layouts with different letters always pass.
-    private func isTrusted(_ layout: KeyboardLayout, for range: Range<Int>, current: KeyboardLayout) -> Bool {
-        let typed = Array(current.text(for: strokes[range]))
-        let converted = Array(layout.text(for: strokes[range]))
-        let shared = zip(typed, converted).filter { $0 == $1 && $0.isLetter }.count
-        guard shared * 2 >= typed.filter(\.isLetter).count else { return true }
-
-        var end = range.lowerBound - 1
-        for _ in 0..<5 {
-            guard end > 0 else { break }
-            let start = strokes[..<end].lastIndex(where: \.isSpace).map { $0 + 1 } ?? 0
-            let previous = start..<end
-            if !previous.isEmpty, case .correct = verdict(for: previous),
-               !detector.isWord(layout.text(for: strokes[previous]), in: layout) {
-                return false
-            }
-            end = start - 1
-        }
-        return true
     }
 
     private func offerLayouts(_ candidates: [Candidate], from start: Int) {
@@ -386,133 +277,11 @@ final class SwitchController: KeyboardMonitorDelegate {
     /// Shows the panel starting at the word at `start`, or refreshes it if it is already up.
     private func offer(from start: Int) {
         if anchor == nil {
-            anchor = includingShortWords(before: start)
+            anchor = currentLayout.map { analyzer.fragmentStart(strokes, before: start, current: $0) } ?? start
             showPanel()
         } else {
             refreshPanel()
         }
-    }
-
-    /// "F ntcns" → "А тесты": one-letter words right before the first wrong one are too short for the
-    /// dictionary to judge, but were most likely typed in the same layout, so the fragment starts with them.
-    /// Real one-letter words of the current language ("я", "и", "a", "I") stop it.
-    private func includingShortWords(before start: Int) -> Int {
-        guard let current = currentLayout, let language = current.language,
-              let realWords = Self.oneLetterWords[String(language.prefix(2))] else { return start }
-        var start = start
-        while start >= 2, strokes[start - 1].isSpace {
-            let end = start - 1
-            let wordStart = strokes[..<end].lastIndex(where: \.isSpace).map { $0 + 1 } ?? 0
-            guard wordStart < end, let core = LayoutDetector.core(of: current.text(for: strokes[wordStart..<end])),
-                  core.count < LayoutDetector.minWordLength,
-                  !core.lowercased().allSatisfy(realWords.contains) else { break }
-            start = wordStart
-        }
-        return start
-    }
-
-    /// The system spell checker accepts any single letter, so these are listed by hand.
-    private static let oneLetterWords: [String: Set<Character>] = [
-        "ru": Set("абвжикосуя"), "uk": Set("авєзійоуя"), "en": Set("ai"),
-    ]
-
-    /// The strokes in `range` rendered through `layout`, except sentence punctuation typed as such:
-    /// "tcnm?" → "есть?", not "есть," (Shift+/ is a comma on the Russian layout). Other symbols are
-    /// converted, since they are where the other layout keeps its punctuation ("ghbdtn/" → "привет.").
-    private func convert(_ range: Range<Int>, to layout: KeyboardLayout) -> String {
-        guard let current = currentLayout else { return layout.text(for: strokes[range]) }
-        return strokes[range].map { stroke in
-            let typed = current.character(for: stroke)
-            let converted = layout.character(for: stroke)
-            let keep = Self.sentencePunctuation.contains(typed) && converted.first?.isLetter != true
-            return keep ? typed : converted
-        }.joined()
-    }
-
-    private static let sentencePunctuation: Set<String> = [".", ",", "!", "?", ":", ";"]
-
-    /// The single switch for everything spelling-related: with it off, nothing gets fixed.
-    private func spellingFix(_ text: String, in layout: KeyboardLayout) -> String? {
-        guard settings.spellingEnabled else { return nil }
-        let key = layout.id + "\u{1}" + text
-        if let cached = fixes[key] { return cached }
-        let fix = detector.spellingFix(for: text, in: layout)
-        fixes[key] = fix
-        return fix
-    }
-
-    private func verdict(for range: Range<Int>) -> Verdict {
-        guard let current = currentLayout else { return .unknown }
-        let word = Array(strokes[range])
-        let key = current.text(for: word)
-        if let cached = verdicts[key] { return cached }
-        let verdict = detector.analyze(word, current: current, layouts: activeLayouts)
-        verdicts[key] = verdict
-        return verdict
-    }
-
-    /// The fragment from `start` with every word that is not valid in the current layout
-    /// re-rendered through `layout` (and spell-fixed there once finished). Correct words, spaces and
-    /// tokens that would not become a word in `layout` (numbers, dashes) stay as typed.
-    private func correction(to layout: KeyboardLayout, from start: Int) -> [SuggestionPanel.Segment] {
-        rewrite(from: start) { range, typed, finished in
-            let verdict = verdict(for: range)
-            if case .correct = verdict { return nil }
-            let converted = convert(range, to: layout)
-            // Judge by the result, not by what was typed: ";" or "[" are letters in Cyrillic layouts ("vj;tv" → "можем").
-            guard LayoutDetector.core(of: converted) != nil else { return nil }
-            guard finished else { return converted }
-            if case .wrong = verdict { return converted }
-            // Valid nowhere: a typo made in the wrong layout, or a typo in the current language.
-            if let fix = spellingFix(converted, in: layout) { return fix }
-            if let current = currentLayout, spellingFix(typed, in: current) != nil { return nil }
-            return converted
-        }
-    }
-
-    /// The fragment from `start` with finished misspelled words replaced by the spell checker's pick.
-    /// Words typed in the wrong layout are left to the layout rows, and the word still being typed
-    /// is left alone: half a word is always "misspelled".
-    private func spelling(from start: Int) -> [SuggestionPanel.Segment] {
-        guard let current = currentLayout else { return [] }
-        return rewrite(from: start) { range, typed, finished in
-            guard finished, case .unknown = verdict(for: range) else { return nil }
-            return spellingFix(typed, in: current)
-        }
-    }
-
-    /// Splits the fragment from `start` into words and spaces. `replace` gets each word's range, its text
-    /// in the current layout and whether a space follows it, and returns new text or nil to keep it.
-    private func rewrite(
-        from start: Int, _ replace: (_ range: Range<Int>, _ typed: String, _ finished: Bool) -> String?
-    ) -> [SuggestionPanel.Segment] {
-        guard let current = currentLayout else { return [] }
-        var segments: [SuggestionPanel.Segment] = []
-        func add(_ text: String, changed: Bool) {
-            if let last = segments.last, last.changed == changed {
-                segments[segments.count - 1] = .init(text: last.text + text, changed: changed)
-            } else {
-                segments.append(.init(text: text, changed: changed))
-            }
-        }
-
-        var index = start
-        while index < strokes.count {
-            if strokes[index].isSpace {
-                add(current.text(for: strokes[index...index]), changed: false)
-                index += 1
-                continue
-            }
-            let end = strokes[index...].firstIndex(where: \.isSpace) ?? strokes.count
-            let typed = current.text(for: strokes[index..<end])
-            if let new = replace(index..<end, typed, end < strokes.count), new != typed {
-                add(new, changed: true)
-            } else {
-                add(typed, changed: false)
-            }
-            index = end
-        }
-        return segments
     }
 
     /// Hotkey digit of a layout: its position among the enabled layouts in System Settings, so that
@@ -528,7 +297,8 @@ final class SwitchController: KeyboardMonitorDelegate {
         guard let anchor, anchor < strokes.count, let current = currentLayout else { return reset() }
         let layout = candidates.first { self.digit(for: $0.layout) == digit }?.layout
         guard digit == Self.spellingDigit || layout != nil else { return reset() }
-        let segments = layout.map { correction(to: $0, from: anchor) } ?? spelling(from: anchor)
+        let segments = layout.map { analyzer.correction(strokes, from: anchor, to: $0, current: current) }
+            ?? analyzer.spelling(strokes, from: anchor, current: current)
         // What is still on screen; if the user erased past the anchor, the correct text before it comes back too.
         let visible = strokes.count - erased
         let start = min(anchor, visible)
@@ -542,14 +312,45 @@ final class SwitchController: KeyboardMonitorDelegate {
         Injector.replace(deleteCount: deleteCount, with: text)
     }
 
+    /// The panel goes away without a pick: words flagged only because the dictionary lacks them get a
+    /// mark, and after `Settings.learnAfterIgnores` marks they go to the system dictionary, so neither
+    /// Swapkey nor other apps flag them again ("раскладку", "кейсы").
+    private func learnIgnoredWords() {
+        guard settings.learnWords, let anchor, erased == 0, let current = currentLayout else { return }
+        let words = Set(analyzer.learnableWords(strokes, from: anchor, current: current).map(Settings.dictionaryForm))
+        guard !words.isEmpty else { return }
+        var ignored = settings.ignoredWords
+        var learned = settings.learnedWords
+        for word in words {
+            let count = (ignored[word] ?? 0) + 1
+            if count >= Settings.learnAfterIgnores {
+                NSSpellChecker.shared.learnWord(word)
+                ignored[word] = nil
+                if !learned.contains(word) { learned.append(word) }
+                NSLog("Swapkey: learned \"\(word)\"")
+            } else {
+                ignored[word] = count
+            }
+        }
+        settings.ignoredWords = ignored
+        settings.learnedWords = learned
+        analyzer.reset()
+    }
+
+    /// Takes a word back out of the system dictionary.
+    func unlearn(_ word: String) {
+        NSSpellChecker.shared.unlearnWord(word)
+        settings.learnedWords.removeAll { $0 == word }
+        analyzer.reset()
+    }
+
     // MARK: - State
 
     private func reset() {
         generation += 1
         strokes.removeAll()
         erased = 0
-        verdicts.removeAll()
-        fixes.removeAll()
+        analyzer.reset()
         hidePanel()
     }
 
@@ -588,13 +389,14 @@ final class SwitchController: KeyboardMonitorDelegate {
 
     /// One row per layout candidate, plus the spelling row if the fragment has typos.
     private func panelRows() -> [SuggestionPanel.Row] {
-        guard let anchor, anchor < strokes.count else { return [] }
+        guard let anchor, anchor < strokes.count, let current = currentLayout else { return [] }
         var rows = candidates.map {
             SuggestionPanel.Row(
-                hotkey: digit(for: $0.layout), segments: correction(to: $0.layout, from: anchor), layoutName: $0.layout.name
+                hotkey: digit(for: $0.layout), segments: analyzer.correction(strokes, from: anchor, to: $0.layout, current: current),
+                layoutName: $0.layout.name
             )
         }
-        let spelling = spelling(from: anchor)
+        let spelling = analyzer.spelling(strokes, from: anchor, current: current)
         if spelling.contains(where: \.changed) {
             rows.append(SuggestionPanel.Row(hotkey: Self.spellingDigit, segments: spelling, layoutName: "Орфография"))
         }
@@ -604,6 +406,7 @@ final class SwitchController: KeyboardMonitorDelegate {
     private func restartHideTimer() {
         hideTimer?.invalidate()
         hideTimer = Timer.scheduledTimer(withTimeInterval: settings.panelTimeout, repeats: false) { [weak self] _ in
+            self?.learnIgnoredWords()
             self?.hidePanel()
         }
     }
@@ -641,16 +444,6 @@ final class SwitchController: KeyboardMonitorDelegate {
         layouts = InputSources.enabledLayouts()
         currentLayout = InputSources.currentLayout()
         settingsChanged()
-    }
-
-    /// Index of the character to lowercase if `chars` (one per stroke) look like "ПРивет":
-    /// the first two letters uppercase, then at least two more letters, all lowercase.
-    static func stickyShiftIndex(_ chars: [String]) -> Int? {
-        let letters = chars.indices.filter { chars[$0].first?.isLetter == true }
-        guard letters.count >= 4 else { return nil }
-        let upper = letters.map { chars[$0].first!.isUppercase }
-        guard upper[0], upper[1], !upper[2...].contains(true) else { return nil }
-        return letters[1]
     }
 
     private static func isPrintable(_ string: String) -> Bool {

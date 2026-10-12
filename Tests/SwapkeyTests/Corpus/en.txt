@@ -1,0 +1,35 @@
+Hi, how are you doing?
+I am busy right now, I will call you back later.
+Thanks a lot for your help.
+Send me the address, please.
+The weather is nice today, let's go for a walk.
+He said he would be late, but he never came.
+I think it is a good idea, let's try it.
+Send me the report for last month.
+Please check why the build fails on the server.
+The meeting is moved to Thursday at three.
+Buy some bread and milk on the way home.
+I am leaving now, I will be there in ten minutes.
+Where did you leave the car keys?
+We ran out of coffee, we need to order more.
+Let's talk in the evening and discuss everything.
+I did not like this movie at all.
+Remind me about the doctor tomorrow.
+The new version is already on the server.
+Tests fail because of a database timeout.
+We need to update the dependencies and rebuild the project.
+I fixed a bug in the payment processing.
+Let's move this logic into a separate class.
+Take a look at my pull request when you have time.
+Commit and push it to the main branch.
+Which cases are not covered by tests yet?
+The client wants an export to a spreadsheet.
+The server responds too slowly, we need to look into it.
+How much does the delivery cost?
+Happy birthday, wish you all the best!
+I hope you had a good rest on vacation.
+The price almost doubled.
+What are you doing this weekend?
+I have no idea how this works.
+Could you review the changes before the release?
+The app crashes when I open the settings.

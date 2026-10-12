@@ -13,6 +13,12 @@ let package = Package(
                 .linkedFramework("Carbon"),
                 .linkedFramework("ApplicationServices"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "SwapkeyTests",
+            dependencies: ["Swapkey"],
+            path: "Tests/SwapkeyTests",
+            resources: [.copy("Corpus")]
+        ),
     ]
 )

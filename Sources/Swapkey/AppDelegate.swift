@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                           checked: settings.fixStickyShift))
         menu.addItem(item("Заглавная буква в начале предложения", #selector(toggleCapitalizeSentences),
                           checked: settings.capitalizeSentences))
+        menu.addItem(item("Запоминать слова, оставленные как есть", #selector(toggleLearnWords),
+                          checked: settings.learnWords))
+        menu.addItem(submenu("Выученные слова", learnedWordItems()))
         menu.addItem(submenu("Показывать подсказку", Settings.panelTimeoutChoices.map { seconds in
             item("\(Int(seconds)) с без нажатий", #selector(setPanelTimeout(_:)),
                  checked: settings.panelTimeout == seconds, value: seconds)
@@ -96,6 +99,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         items.append(.separator())
         items.append(disabled("Выключенные не предлагаются и не проверяются"))
+        return items
+    }
+
+    private func learnedWordItems() -> [NSMenuItem] {
+        let words = settings.learnedWords
+        guard !words.isEmpty else { return [disabled("Пока нет")] }
+        var items = [disabled("Нажмите, чтобы убрать из словаря:")]
+        items += words.sorted().map { item($0, #selector(unlearnWord(_:)), value: $0) }
         return items
     }
 
@@ -172,6 +183,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleCapitalizeSentences() {
         settings.capitalizeSentences.toggle()
+    }
+
+    @objc private func toggleLearnWords() {
+        settings.learnWords.toggle()
+    }
+
+    @objc private func unlearnWord(_ sender: NSMenuItem) {
+        guard let word = sender.representedObject as? String else { return }
+        controller.unlearn(word)
     }
 
     @objc private func setPanelTimeout(_ sender: NSMenuItem) {
