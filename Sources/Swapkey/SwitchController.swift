@@ -7,13 +7,14 @@ import Carbon
 /// moves the caret or may have changed text out of our sight (mouse click, arrows, Return, shortcuts)
 /// resets it, because then we no longer know what is in front of the caret.
 final class SwitchController: KeyboardMonitorDelegate {
-    /// Hotkey: ⌥ + digit picks a suggestion while the panel is visible.
-    static let hotkeyModifier: CGEventFlags = .maskAlternate
-    static let hotkeyPrefix = "⌥"
+    /// Hotkey: ⌘ + digit picks a suggestion while the panel is visible (and only then: otherwise ⌘1…⌘9
+    /// stay with the app, e.g. browser tabs).
+    static let hotkeyModifier: CGEventFlags = .maskCommand
+    static let hotkeyPrefix = "⌘"
     static let spellingDigit = 0
     static let maxBufferLength = 300
 
-    /// Indexed by digit. ⌥1…⌥9 pick layouts, ⌥0 picks the spelling fix.
+    /// Indexed by digit. ⌘1…⌘9 pick layouts, ⌘0 picks the spelling fix.
     private static let digitKeyCodes: [Int] = [
         kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
         kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9,
@@ -405,6 +406,8 @@ final class SwitchController: KeyboardMonitorDelegate {
 
     private func restartHideTimer() {
         hideTimer?.invalidate()
+        hideTimer = nil
+        guard settings.panelTimeout > 0 else { return }
         hideTimer = Timer.scheduledTimer(withTimeInterval: settings.panelTimeout, repeats: false) { [weak self] _ in
             self?.learnIgnoredWords()
             self?.hidePanel()

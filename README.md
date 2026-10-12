@@ -2,13 +2,13 @@
 
 macOS menu-bar app that catches words typed in the wrong keyboard layout and fixes them with one hotkey.
 
-Type "ghbdtn" with the English layout active and Swapkey shows a small panel next to the caret with "привет". Press `⌥N` and the fragment is retyped in that layout, and the input source is switched.
+Type "ghbdtn" with the English layout active and Swapkey shows a small panel next to the caret with "привет". Press `⌘N` and the fragment is retyped in that layout, and the input source is switched.
 
 ## Features
 
 - Detection uses the macOS spell checker for every enabled layout. A word counts as wrong when it is invalid in the current layout and valid in another one.
-- Hotkeys follow the order of layouts in System Settings: `⌥1` is the first layout, `⌥2` the second, and so on, so each layout always has the same key.
-- Optional spelling suggestions for the current language with `⌥0`.
+- Hotkeys follow the order of layouts in System Settings: `⌘1` is the first layout, `⌘2` the second, and so on, so each layout always has the same key.
+- Optional spelling suggestions for the current language with `⌘0`.
 - Sticky Shift fix: "ПРивет" becomes "Привет" automatically.
 - Sentence capitalization: "Привет. как дела" becomes "Привет. Как дела" automatically (not after abbreviations like "т.е." or "см.").
 - Learns words missing from the system dictionary: a word you leave as typed twice while it is flagged is added to the macOS spelling dictionary (can be turned off; learned words are listed in the menu and can be removed).

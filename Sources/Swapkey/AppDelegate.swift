@@ -68,7 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                           checked: settings.learnWords))
         menu.addItem(submenu("Выученные слова", learnedWordItems()))
         menu.addItem(submenu("Показывать подсказку", Settings.panelTimeoutChoices.map { seconds in
-            item("\(Int(seconds)) с без нажатий", #selector(setPanelTimeout(_:)),
+            item(seconds > 0 ? "\(Int(seconds)) с без нажатий" : "Не скрывать", #selector(setPanelTimeout(_:)),
                  checked: settings.panelTimeout == seconds, value: seconds)
         }))
         menu.addItem(submenu("Скрывать после правильных слов", Settings.hideAfterCorrectWordsChoices.map { count in

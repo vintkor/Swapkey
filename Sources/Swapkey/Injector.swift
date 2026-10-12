@@ -12,6 +12,7 @@ enum Injector {
 
     static func replace(deleteCount: Int, with text: String) {
         queue.async {
+            waitForCommandRelease()
             // Private state: the user's still-held hotkey modifier must not leak into our events.
             let source = CGEventSource(stateID: .privateState)
             for _ in 0..<deleteCount {
@@ -40,6 +41,16 @@ enum Injector {
             for _ in 0..<(offset + text.count) {
                 post(keyCode: CGKeyCode(kVK_LeftArrow), source: source)
             }
+        }
+    }
+
+    /// The hotkey is ⌘ + digit. Our events carry no flags, but should a held ⌘ still mix in, Backspace
+    /// would delete the whole line and letters would become shortcuts (⌘P prints), so wait for it to be
+    /// released, a second at most.
+    private static func waitForCommandRelease() {
+        for _ in 0..<100 {
+            guard CGEventSource.flagsState(.hidSystemState).contains(.maskCommand) else { return }
+            usleep(10_000)
         }
     }
 

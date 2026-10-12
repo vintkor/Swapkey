@@ -4,7 +4,8 @@ import Foundation
 final class Settings {
     static let shared = Settings()
 
-    static let panelTimeoutChoices: [TimeInterval] = [15, 30, 60]
+    /// 0 means never: the panel stays until a pick, a reset or the correct-word streak.
+    static let panelTimeoutChoices: [TimeInterval] = [15, 30, 60, 0]
     static let hideAfterCorrectWordsChoices = [2, 3, 5]
     /// Times a flagged word must be left as typed before it is added to the dictionary.
     static let learnAfterIgnores = 2
@@ -46,7 +47,7 @@ final class Settings {
         defaults.set(true, forKey: migrated)
     }
 
-    /// Offer spelling fixes (⌥0) and fix typos in words typed in the wrong layout.
+    /// Offer spelling fixes (⌘0) and fix typos in words typed in the wrong layout.
     var spellingEnabled: Bool {
         get { defaults.bool(forKey: Key.spellingEnabled) }
         set { defaults.set(newValue, forKey: Key.spellingEnabled) }
@@ -64,7 +65,7 @@ final class Settings {
         set { defaults.set(newValue, forKey: Key.capitalizeSentences) }
     }
 
-    /// Idle time after which the panel hides; every key press while it is shown restarts the countdown.
+    /// Idle time after which the panel hides (0: never); every key press while it is shown restarts the countdown.
     var panelTimeout: TimeInterval {
         get { defaults.double(forKey: Key.panelTimeout) }
         set { defaults.set(newValue, forKey: Key.panelTimeout) }
