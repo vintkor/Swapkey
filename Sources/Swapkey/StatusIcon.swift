@@ -9,14 +9,21 @@ enum StatusIcon {
             let shape = rect.insetBy(dx: 1, dy: 1)
             NSBezierPath(roundedRect: shape, xRadius: shape.width * 0.225, yRadius: shape.width * 0.225).fill()
 
-            let config = NSImage.SymbolConfiguration(pointSize: 9.5, weight: .bold)
-            guard let symbol = NSImage(systemSymbolName: "keyboard", accessibilityDescription: nil)?
-                .withSymbolConfiguration(config) else { return true }
-            let symbolRect = NSRect(
-                x: shape.midX - symbol.size.width / 2, y: shape.midY - symbol.size.height / 2,
-                width: symbol.size.width, height: symbol.size.height
-            )
-            symbol.draw(in: symbolRect, from: .zero, operation: .destinationOut, fraction: 1)
+            // The keyboard is drawn by hand: a scaled-down SF Symbol lands between pixels and comes out blurry.
+            // Every edge sits on the 0.5 pt grid, which is one pixel on Retina.
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            let frame = NSBezierPath(roundedRect: NSRect(x: 3.5, y: 5, width: 11, height: 8), xRadius: 1.5, yRadius: 1.5)
+            frame.append(NSBezierPath(rect: NSRect(x: 4.5, y: 6, width: 9, height: 6)).reversed)
+            frame.fill()
+            var keys: [NSRect] = []
+            for row in 0..<2 {
+                for column in 0..<5 {
+                    keys.append(NSRect(x: 5.5 + CGFloat(column) * 1.5, y: 10 - CGFloat(row) * 1.5, width: 1, height: 1))
+                }
+            }
+            keys += [NSRect(x: 5.5, y: 7, width: 1, height: 1), NSRect(x: 7, y: 7, width: 4, height: 1),
+                     NSRect(x: 11.5, y: 7, width: 1, height: 1)]
+            keys.forEach { $0.fill() }
             return true
         }
         image.isTemplate = true

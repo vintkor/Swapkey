@@ -10,6 +10,11 @@ cd "$(dirname "$0")"
 CONFIG="${1:-release}"
 APP="build/Swapkey.app"
 
+# The version comes from the latest git tag vX.Y.Z, the build number from the commit count.
+VERSION="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || echo v0.0.0)"
+VERSION="${VERSION#v}"
+BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
+
 swift build -c "$CONFIG"
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/Swapkey"
 
@@ -36,8 +41,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>Swapkey</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$BUILD</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
 </dict>
@@ -53,4 +58,4 @@ else
     echo "warning: \"$SIGN_NAME\" certificate not found, signing ad-hoc (Accessibility must be re-granted after each build)" >&2
     codesign --force --sign - --identifier local.swapkey "$APP"
 fi
-echo "Built $APP"
+echo "Built $APP $VERSION ($BUILD)"

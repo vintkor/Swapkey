@@ -9,7 +9,7 @@ Swapkey: a macOS menu-bar app (Swift, AppKit, no Xcode project) in the style of 
 ## Commands
 
 - `swift build`: debug build, for compile checks only.
-- `./build.sh` (or `./build.sh debug`): builds and assembles `build/Swapkey.app` (Info.plist with `LSUIElement`, codesign). Signs with the self-signed "Punto Dev" code-signing certificate from the login keychain (it shows as `CSSMERR_TP_NOT_TRUSTED`, which codesign tolerates), falling back to ad-hoc if it is missing.
+- `./build.sh` (or `./build.sh debug`): builds and assembles `build/Swapkey.app` (Info.plist with `LSUIElement`, codesign). Signs with the self-signed "Punto Dev" code-signing certificate from the login keychain (it shows as `CSSMERR_TP_NOT_TRUSTED`, which codesign tolerates), falling back to ad-hoc if it is missing. Version = latest `vX.Y.Z` git tag (`v0.0.0` without one), build number = `git rev-list --count HEAD`; shown at the bottom of the status menu.
 - `swift scripts/make-icon.swift`: redraws `Resources/AppIcon.icns` (gradient squircle + SF Symbol `keyboard`); the generated file is committed and copied by `build.sh`.
 - `open build/Swapkey.app`: run it. The app needs **Accessibility** permission (`open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"`). TCC ties it to the designated requirement: with "Punto Dev" that is identifier + certificate, stable across rebuilds; with ad-hoc it is the cdhash, so the permission has to be removed and granted again after every rebuild.
 - Only Command Line Tools are installed (no Xcode), so XCTest may be unavailable. There is no test target. To check detection logic, compile `KeyboardLayout.swift` + `LayoutDetector.swift` together with a scratch `main.swift` via `swiftc` and call `LayoutDetector.analyze` directly.

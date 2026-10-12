@@ -79,6 +79,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(item("Открывать при входе в систему", #selector(toggleLaunchAtLogin),
                           checked: SMAppService.mainApp.status == .enabled))
         menu.addItem(item("Настройки Универсального доступа…", #selector(openAccessibilitySettings)))
+        menu.addItem(.separator())
+        menu.addItem(item("О программе Swapkey \(Self.version)…", #selector(showAbout)))
         menu.addItem(NSMenuItem(title: "Выход", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
@@ -113,6 +115,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if items.isEmpty { items.append(disabled("Нет исключений")) }
         return items
+    }
+
+    /// "1.2.0 (34)" from Info.plist, which build.sh fills from the git tag and commit count.
+    private static var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "dev"
+        guard let build = info?["CFBundleVersion"] as? String else { return short }
+        return "\(short) (\(build))"
     }
 
     private static func appName(_ bundleID: String) -> String {
@@ -202,5 +212,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openAccessibilitySettings() {
         let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func showAbout() {
+        let credits = NSMutableAttributedString(
+            string: "Исправляет слова, набранные не в той раскладке.\n",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                         .foregroundColor: NSColor.labelColor])
+        credits.append(NSAttributedString(
+            string: "github.com/vintkor/Swapkey",
+            attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+                         .link: URL(string: "https://github.com/vintkor/Swapkey")!]))
+        credits.setAlignment(.center, range: NSRange(location: 0, length: credits.length))
+        // A menu-bar app is never active on its own, so the panel would open behind the frontmost window.
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
     }
 }
