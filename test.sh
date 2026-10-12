@@ -10,4 +10,6 @@ if [[ -d "$CLT/Frameworks/Testing.framework" ]]; then
     FLAGS=(-Xswiftc -F"$CLT/Frameworks" -Xlinker -F"$CLT/Frameworks"
            -Xlinker -rpath -Xlinker "$CLT/Frameworks" -Xlinker -rpath -Xlinker "$CLT/usr/lib")
 fi
-swift test "${FLAGS[@]}" "$@"
+# Serial: NSSpellChecker and the key maps are not thread-safe (the app uses them from main only),
+# and parallel tests crash on them now and then.
+swift test --no-parallel "${FLAGS[@]}" "$@"
